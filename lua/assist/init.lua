@@ -1,6 +1,5 @@
 local config = require("assist.config")
 local utils = require("assist.utils")
-local Job = require("plenary.job")
 
 local M = {}
 
@@ -16,7 +15,7 @@ local function build_prompt(selection, user_prompt, file_path, lang)
 			.. "Lines: %d-%d\n\n"
 			.. "Code to replace:\n```%s\n%s\n```\n\n"
 			.. "Additional instructions: %s\n\n"
-			.. "Return ONLY the replacement code with no surrounding explanation.",
+			.. "Return ONLY replacement code with no surrounding explanations.",
 		file_path,
 		lang,
 		selection.start_line + 1,
@@ -32,40 +31,61 @@ local function run_assist(selection, user_prompt)
 	local file_path = vim.api.nvim_buf_get_name(buf)
 	local lang = vim.bo[buf].filetype
 	local prompt = build_prompt(selection, user_prompt, file_path, lang)
-	utils.log("Built prompt")
 	local opts = config.options
 
 	local stdout_lines = {}
+	local stderr_lines = {}
 
-	utils.log("Calling Claude")
-	utils.log(opts.claude_cmd .. " --print --output-format " .. opts.output_format .. " " .. prompt)
-	Job:new({
-		command = opts.claude_cmd,
-		args = { "--print", "--output-format", opts.output_format, prompt },
-		on_stdout = function(_, line)
-			table.insert(stdout_lines, line)
+	local job_id = vim.fn.jobstart({ opts.claude_cmd, "--print", "--output-format", opts.output_format, prompt }, {
+		stdout_buffered = false,
+		stderr_buffered = false,
+		on_stdout = function(_, lines)
+			for _, line in ipairs(lines) do
+				if line ~= "" then
+					table.insert(stdout_lines, line)
+				end
+			end
+		end,
+		on_stderr = function(_, lines)
+			for _, line in ipairs(lines) do
+				if line ~= "" then
+					table.insert(stderr_lines, line)
+				end
+			end
 		end,
 		on_exit = function(_, code)
 			vim.schedule(function()
 				if code ~= 0 then
-					vim.notify("[assist.nvim] claude exited with code " .. code, vim.log.levels.ERROR)
+					local stderr_out = table.concat(stderr_lines, "\n")
+					vim.notify(
+						"[assist.nvim] claude exited with code "
+							.. code
+							.. (stderr_out ~= "" and (": " .. stderr_out) or ""),
+						vim.log.levels.ERROR
+					)
 					return
 				end
 
 				local raw = table.concat(stdout_lines, "\n")
 				local result, err = utils.parse_claude_response(raw)
-				utils.log("Got response: " .. result)
 				if err then
 					vim.notify("[assist.nvim] " .. err, vim.log.levels.ERROR)
 					return
 				end
 
-				utils.log("Replacing text")
 				utils.replace_lines(buf, selection.start_line, selection.end_line, result)
 				vim.notify("[assist.nvim] Done.", vim.log.levels.INFO)
 			end)
 		end,
-	}):start()
+	})
+
+	if job_id <= 0 then
+		vim.notify("[assist.nvim] Failed to start claude (job_id=" .. job_id .. ")", vim.log.levels.ERROR)
+		return
+	end
+
+	-- Close stdin so claude doesn't block waiting for input
+	vim.fn.chanclose(job_id, "stdin")
 end
 
 local function prompt_and_run(selection)
