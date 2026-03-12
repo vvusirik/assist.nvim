@@ -1,6 +1,8 @@
 local config = require("assist.config")
 local utils = require("assist.utils")
 
+local ns = vim.api.nvim_create_namespace("assist_loading")
+
 local M = {}
 
 function M.setup(opts)
@@ -33,6 +35,46 @@ local function run_assist(selection, user_prompt)
 	local prompt = build_prompt(selection, user_prompt, file_path, lang)
 	local opts = config.options
 
+	-- Place animated virtual lines above start and below end of the selection.
+	-- These are extmarks so they don't affect buffer content or line indices.
+	local text = "Loading completion."
+	local top_id = vim.api.nvim_buf_set_extmark(buf, ns, selection.start_line, 0, {
+		virt_lines = { { { text, "Comment" } } },
+		virt_lines_above = true,
+	})
+	local bot_id = vim.api.nvim_buf_set_extmark(buf, ns, selection.end_line, 0, {
+		virt_lines = { { { text, "Comment" } } },
+	})
+
+	local dots = 1
+	local uv = vim.uv or vim.loop
+	local timer = uv.new_timer()
+	timer:start(
+		400,
+		400,
+		vim.schedule_wrap(function()
+			dots = (dots % 3) + 1
+			local animated = "Loading completion" .. string.rep(".", dots)
+			vim.api.nvim_buf_set_extmark(buf, ns, selection.start_line, 0, {
+				id = top_id,
+				virt_lines = { { { animated, "Comment" } } },
+				virt_lines_above = true,
+			})
+			vim.api.nvim_buf_set_extmark(buf, ns, selection.end_line, 0, {
+				id = bot_id,
+				virt_lines = { { { animated, "Comment" } } },
+			})
+		end)
+	)
+
+	local function stop_loading()
+		if not timer:is_closing() then
+			timer:stop()
+			timer:close()
+		end
+		vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+	end
+
 	local stdout_lines = {}
 	local stderr_lines = {}
 
@@ -55,6 +97,7 @@ local function run_assist(selection, user_prompt)
 		end,
 		on_exit = function(_, code)
 			vim.schedule(function()
+				stop_loading()
 				if code ~= 0 then
 					local stderr_out = table.concat(stderr_lines, "\n")
 					vim.notify(
@@ -80,6 +123,7 @@ local function run_assist(selection, user_prompt)
 	})
 
 	if job_id <= 0 then
+		stop_loading()
 		vim.notify("[assist.nvim] Failed to start claude (job_id=" .. job_id .. ")", vim.log.levels.ERROR)
 		return
 	end
