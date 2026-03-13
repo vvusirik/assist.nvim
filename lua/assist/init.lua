@@ -36,7 +36,8 @@ local function run_assist(selection, user_prompt)
 
 	-- Place animated virtual lines above start and below end of the selection.
 	-- These are extmarks so they don't affect buffer content or line indices.
-	local text = "Loading completion."
+	local spinner_frames = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
+	local text = spinner_frames[1] .. " Implementing..."
 	local top_id = vim.api.nvim_buf_set_extmark(buf, ns, selection.start_line, 0, {
 		virt_lines = { { { text, "Comment" } } },
 		virt_lines_above = true,
@@ -45,15 +46,15 @@ local function run_assist(selection, user_prompt)
 		virt_lines = { { { text, "Comment" } } },
 	})
 
-	local dots = 1
+	local frame = 1
 	local uv = vim.uv or vim.loop
 	local timer = uv.new_timer()
 	timer:start(
-		400,
-		400,
+		80,
+		80,
 		vim.schedule_wrap(function()
-			dots = (dots % 3) + 1
-			local animated = "Loading completion" .. string.rep(".", dots)
+			frame = (frame % #spinner_frames) + 1
+			local animated = spinner_frames[frame] .. " Implementing..."
 			-- Query current positions so the animation follows the marks as the buffer changes
 			local top_pos = vim.api.nvim_buf_get_extmark_by_id(buf, ns, top_id, {})
 			local bot_pos = vim.api.nvim_buf_get_extmark_by_id(buf, ns, bot_id, {})
