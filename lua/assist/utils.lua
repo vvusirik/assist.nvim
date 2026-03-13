@@ -21,22 +21,27 @@ function M.replace_lines(buf, start_line, end_line, new_text)
 	vim.api.nvim_buf_set_lines(buf, start_line, end_line + 1, false, new_lines)
 end
 
--- Extract the code block from claude's JSON response
+-- Extract the replacement from claude's JSON response.
+-- Claude attempts an Edit tool call which lands in permission_denials since
+-- the subprocess has no write access. We pull new_string from that denial.
 function M.parse_claude_response(raw)
-	local ok, decoded = pcall(vim.json.decode, raw)
-	if not ok or not decoded then
-		return nil, "Failed to parse JSON response"
+	local ok, envelope = pcall(vim.json.decode, raw)
+	if not ok or not envelope then
+		return nil, "Failed to parse CLI JSON envelope"
 	end
 
-	-- Claude Code JSON output has a 'result' field
-	local result = decoded.result
-	if not result then
-		return nil, "No result field in response"
+	local denials = envelope.permission_denials
+	if not denials or #denials == 0 then
+		return nil, "No permission_denials in response (did Claude attempt an Edit?)"
 	end
 
-	-- Strip markdown code fences if present
-	result = result:gsub("^```%w*\n", ""):gsub("\n```$", "")
-	return result, nil
+	for _, denial in ipairs(denials) do
+		if denial.tool_name == "Edit" and denial.tool_input and denial.tool_input.new_string then
+			return denial.tool_input.new_string, nil
+		end
+	end
+
+	return nil, "No Edit tool call found in permission_denials"
 end
 
 function M.log(msg)

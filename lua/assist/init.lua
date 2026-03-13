@@ -11,13 +11,12 @@ end
 
 local function build_prompt(selection, user_prompt, file_path, lang)
 	return string.format(
-		"Complete or implement the code for the following region.\n\n"
+		"Complete or implement the code for the following region, then use your Edit tool to apply the change.\n\n"
 			.. "File: %s\n"
 			.. "Language: %s\n"
 			.. "Lines: %d-%d\n\n"
 			.. "Code to replace:\n```%s\n%s\n```\n\n"
-			.. "Additional instructions: %s\n\n"
-			.. "Return ONLY replacement code with no surrounding explanations.",
+			.. "Additional instructions: %s",
 		file_path,
 		lang,
 		selection.start_line + 1,
@@ -55,15 +54,22 @@ local function run_assist(selection, user_prompt)
 		vim.schedule_wrap(function()
 			dots = (dots % 3) + 1
 			local animated = "Loading completion" .. string.rep(".", dots)
-			vim.api.nvim_buf_set_extmark(buf, ns, selection.start_line, 0, {
-				id = top_id,
-				virt_lines = { { { animated, "Comment" } } },
-				virt_lines_above = true,
-			})
-			vim.api.nvim_buf_set_extmark(buf, ns, selection.end_line, 0, {
-				id = bot_id,
-				virt_lines = { { { animated, "Comment" } } },
-			})
+			-- Query current positions so the animation follows the marks as the buffer changes
+			local top_pos = vim.api.nvim_buf_get_extmark_by_id(buf, ns, top_id, {})
+			local bot_pos = vim.api.nvim_buf_get_extmark_by_id(buf, ns, bot_id, {})
+			if #top_pos > 0 then
+				vim.api.nvim_buf_set_extmark(buf, ns, top_pos[1], top_pos[2], {
+					id = top_id,
+					virt_lines = { { { animated, "Comment" } } },
+					virt_lines_above = true,
+				})
+			end
+			if #bot_pos > 0 then
+				vim.api.nvim_buf_set_extmark(buf, ns, bot_pos[1], bot_pos[2], {
+					id = bot_id,
+					virt_lines = { { { animated, "Comment" } } },
+				})
+			end
 		end)
 	)
 
@@ -97,7 +103,11 @@ local function run_assist(selection, user_prompt)
 		end,
 		on_exit = function(_, code)
 			vim.schedule(function()
+				-- Read tracked positions before stop_loading() clears the namespace
+				local top_pos = vim.api.nvim_buf_get_extmark_by_id(buf, ns, top_id, {})
+				local bot_pos = vim.api.nvim_buf_get_extmark_by_id(buf, ns, bot_id, {})
 				stop_loading()
+
 				if code ~= 0 then
 					local stderr_out = table.concat(stderr_lines, "\n")
 					vim.notify(
@@ -116,7 +126,13 @@ local function run_assist(selection, user_prompt)
 					return
 				end
 
-				utils.replace_lines(buf, selection.start_line, selection.end_line, result)
+				local current_start = top_pos[1] or selection.start_line
+				local current_end = bot_pos[1] or selection.end_line
+				-- Guard: if the region was fully deleted, treat as an insertion point
+				if current_end < current_start then
+					current_end = current_start
+				end
+				utils.replace_lines(buf, current_start, current_end, result)
 				vim.notify("[assist.nvim] Done.", vim.log.levels.INFO)
 			end)
 		end,
