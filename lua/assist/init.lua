@@ -1,5 +1,6 @@
 local config = require("assist.config")
 local utils = require("assist.utils")
+local context = require("assist.context")
 
 local ns = vim.api.nvim_create_namespace("assist_loading")
 
@@ -9,30 +10,53 @@ function M.setup(opts)
 	config.setup(opts)
 end
 
-local function build_prompt(selection, user_prompt, file_path, lang)
-	return string.format(
-		"Complete or implement the code for the following region, then use your Edit tool to apply the change.\n\n"
-			.. "File: %s\n"
-			.. "Language: %s\n"
-			.. "Lines: %d-%d\n\n"
-			.. "Code to replace:\n```%s\n%s\n```\n\n"
-			.. "Additional instructions: %s",
-		file_path,
-		lang,
-		selection.start_line + 1,
-		selection.end_line + 1,
-		lang,
-		selection.text,
-		user_prompt
-	)
+local function build_prompt(selection, user_prompt, file_path, lang, ctx)
+	local parts = {
+		"<task>Complete or implement the following code region. You MUST apply your changes using the Edit tool — do not print the code as text.</task>",
+		string.format(
+			"<file path=%q language=%q start_line=%q end_line=%q/>",
+			file_path,
+			lang,
+			tostring(selection.start_line + 1),
+			tostring(selection.end_line + 1)
+		),
+		string.format("<selection>\n```%s\n%s\n```\n</selection>", lang, selection.text),
+	}
+
+	if ctx then
+		local ctx_parts = {}
+		if ctx.enclosing_scope then
+			table.insert(
+				ctx_parts,
+				string.format("<enclosing_scope>\n```%s\n%s\n```\n</enclosing_scope>", lang, ctx.enclosing_scope)
+			)
+		end
+		if ctx.imports then
+			table.insert(ctx_parts, string.format("<imports>\n```%s\n%s\n```\n</imports>", lang, ctx.imports))
+		end
+		if ctx.diagnostics then
+			table.insert(ctx_parts, string.format("<diagnostics>\n%s\n</diagnostics>", ctx.diagnostics))
+		end
+		if ctx.doc_symbols then
+			table.insert(ctx_parts, string.format("<doc_symbols>\n%s\n</doc_symbols>", ctx.doc_symbols))
+		end
+		if #ctx_parts > 0 then
+			table.insert(parts, "<context>\n" .. table.concat(ctx_parts, "\n") .. "\n</context>")
+		end
+	end
+
+	table.insert(parts, string.format("<instructions>%s</instructions>", user_prompt))
+	local prompt = table.concat(parts, "\n")
+	utils.log(prompt)
+	return prompt
 end
 
-local function run_assist(selection, user_prompt)
+local function run_assist_selection(selection, user_prompt)
 	local buf = selection.buf
 	local file_path = vim.api.nvim_buf_get_name(buf)
 	local lang = vim.bo[buf].filetype
-	local prompt = build_prompt(selection, user_prompt, file_path, lang)
 	local opts = config.options
+	local ctx_cfg = opts.context or {}
 
 	-- Place animated virtual lines above start and below end of the selection.
 	-- These are extmarks so they don't affect buffer content or line indices.
@@ -82,71 +106,90 @@ local function run_assist(selection, user_prompt)
 		vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
 	end
 
-	local stdout_lines = {}
-	local stderr_lines = {}
+	local function start_job(ctx)
+		local prompt = build_prompt(selection, user_prompt, file_path, lang, ctx)
+		local stdout_lines = {}
+		local stderr_lines = {}
 
-	local job_id = vim.fn.jobstart({ opts.claude_cmd, "--print", "--output-format", opts.output_format, prompt }, {
-		stdout_buffered = false,
-		stderr_buffered = false,
-		on_stdout = function(_, lines)
-			for _, line in ipairs(lines) do
-				if line ~= "" then
-					table.insert(stdout_lines, line)
+		local job_id = vim.fn.jobstart({ opts.claude_cmd, "--print", "--output-format", opts.output_format, prompt }, {
+			stdout_buffered = false,
+			stderr_buffered = false,
+			on_stdout = function(_, lines)
+				for _, line in ipairs(lines) do
+					if line ~= "" then
+						table.insert(stdout_lines, line)
+					end
 				end
-			end
-		end,
-		on_stderr = function(_, lines)
-			for _, line in ipairs(lines) do
-				if line ~= "" then
-					table.insert(stderr_lines, line)
+			end,
+			on_stderr = function(_, lines)
+				for _, line in ipairs(lines) do
+					if line ~= "" then
+						table.insert(stderr_lines, line)
+					end
 				end
-			end
-		end,
-		on_exit = function(_, code)
-			vim.schedule(function()
-				-- Read tracked positions before stop_loading() clears the namespace
-				local top_pos = vim.api.nvim_buf_get_extmark_by_id(buf, ns, top_id, {})
-				local bot_pos = vim.api.nvim_buf_get_extmark_by_id(buf, ns, bot_id, {})
-				stop_loading()
+			end,
+			on_exit = function(_, code)
+				vim.schedule(function()
+					-- Read tracked positions before stop_loading() clears the namespace
+					local top_pos = vim.api.nvim_buf_get_extmark_by_id(buf, ns, top_id, {})
+					local bot_pos = vim.api.nvim_buf_get_extmark_by_id(buf, ns, bot_id, {})
+					stop_loading()
 
-				if code ~= 0 then
-					local stderr_out = table.concat(stderr_lines, "\n")
-					vim.notify(
-						"[assist.nvim] claude exited with code "
-							.. code
-							.. (stderr_out ~= "" and (": " .. stderr_out) or ""),
-						vim.log.levels.ERROR
-					)
-					return
-				end
+					if code ~= 0 then
+						local stderr_out = table.concat(stderr_lines, "\n")
+						vim.notify(
+							"[assist.nvim] claude exited with code "
+								.. code
+								.. (stderr_out ~= "" and (": " .. stderr_out) or ""),
+							vim.log.levels.ERROR
+						)
+						return
+					end
 
-				local raw = table.concat(stdout_lines, "\n")
-				local result, err = utils.parse_claude_response(raw)
-				if err then
-					vim.notify("[assist.nvim] " .. err, vim.log.levels.ERROR)
-					return
-				end
+					local raw = table.concat(stdout_lines, "\n")
+					local result, err = utils.parse_claude_response(raw)
+					if err then
+						vim.notify("[assist.nvim] " .. err, vim.log.levels.ERROR)
+						return
+					end
 
-				local current_start = top_pos[1] or selection.start_line
-				local current_end = bot_pos[1] or selection.end_line
-				-- Guard: if the region was fully deleted, treat as an insertion point
-				if current_end < current_start then
-					current_end = current_start
-				end
-				utils.replace_lines(buf, current_start, current_end, result)
-				vim.notify("[assist.nvim] Done.", vim.log.levels.INFO)
-			end)
-		end,
-	})
+					local current_start = top_pos[1] or selection.start_line
+					local current_end = bot_pos[1] or selection.end_line
+					-- Guard: if the region was fully deleted, treat as an insertion point
+					if current_end < current_start then
+						current_end = current_start
+					end
+					utils.replace_lines(buf, current_start, current_end, result)
+					vim.notify("[assist.nvim] Done.", vim.log.levels.INFO)
+				end)
+			end,
+		})
 
-	if job_id <= 0 then
-		stop_loading()
-		vim.notify("[assist.nvim] Failed to start claude (job_id=" .. job_id .. ")", vim.log.levels.ERROR)
-		return
+		if job_id <= 0 then
+			stop_loading()
+			vim.notify("[assist.nvim] Failed to start claude (job_id=" .. job_id .. ")", vim.log.levels.ERROR)
+			return
+		end
+
+		-- Close stdin so claude doesn't block waiting for input
+		vim.fn.chanclose(job_id, "stdin")
 	end
 
-	-- Close stdin so claude doesn't block waiting for input
-	vim.fn.chanclose(job_id, "stdin")
+	if ctx_cfg.treesitter or ctx_cfg.lsp then
+		context.gather(buf, selection.start_line, selection.end_line, ctx_cfg.lsp_timeout_ms or 2000, function(ctx)
+			if not ctx_cfg.treesitter then
+				ctx.enclosing_scope = nil
+				ctx.imports = nil
+			end
+			if not ctx_cfg.lsp then
+				ctx.diagnostics = nil
+				ctx.doc_symbols = nil
+			end
+			start_job(ctx)
+		end)
+	else
+		start_job(nil)
+	end
 end
 
 local function prompt_and_run(selection)
@@ -186,7 +229,7 @@ local function prompt_and_run(selection)
 			return
 		end
 		vim.notify("[assist.nvim] Running claude...", vim.log.levels.INFO)
-		run_assist(selection, input)
+		run_assist_selection(selection, input)
 	end
 
 	local map_opts = { noremap = true, silent = true, buffer = buf }
@@ -195,8 +238,8 @@ local function prompt_and_run(selection)
 	vim.keymap.set("n", "<Esc>", close, map_opts)
 end
 
-function M.assist_prompt()
-	local selection = utils.get_visual_selection()
+function M.assist_visual_selection(line1, line2)
+	local selection = utils.get_visual_selection(line1, line2)
 	if selection.text == "" then
 		vim.notify("[assist.nvim] No text selected.", vim.log.levels.WARN)
 		return
