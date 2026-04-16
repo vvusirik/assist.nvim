@@ -10,10 +10,9 @@ local _session = nil
 
 local function build_multi_prompt(user_prompt)
 	local cwd = vim.fn.getcwd()
-	local file_tree = utils.get_file_tree(cwd)
 	local parts = {
 		"<task>Analyze the project and make all changes required by the instructions. "
-			.. "Use the Read tool to read any files you need. "
+			.. "Use your tools to read and explore any files you need. "
 			.. "When ready, respond with ONLY a raw JSON array — no explanation, no markdown, no code fences. "
 			.. "Each element must be an object with exactly these fields: "
 			.. '"file_path" (path relative to cwd), '
@@ -26,7 +25,6 @@ local function build_multi_prompt(user_prompt)
 			.. 'set start_line=N, end_line=N, new_content="<exact text of line N>\\n<new lines to insert>". '
 			.. "One object per contiguous changed region. Do not merge unrelated changes into one object.</task>",
 		string.format("<cwd>%s</cwd>", cwd),
-		string.format("<file_tree>\n%s\n</file_tree>", file_tree),
 		string.format("<instructions>%s</instructions>", user_prompt),
 	}
 	local prompt = table.concat(parts, "\n")
