@@ -23,27 +23,6 @@ function M.replace_lines(buf, start_line, end_line, new_text)
 	vim.api.nvim_buf_set_lines(buf, start_line, end_line + 1, false, new_lines)
 end
 
--- Return a newline-separated list of project-relative file paths.
--- Uses git ls-files when available, otherwise globs for non-hidden files.
-function M.get_file_tree(cwd)
-	local result = vim.fn.systemlist("git -C " .. vim.fn.shellescape(cwd) .. " ls-files 2>/dev/null")
-	if vim.v.shell_error ~= 0 or #result == 0 then
-		local all = vim.fn.globpath(cwd, "**/*", false, true)
-		result = {}
-		for _, p in ipairs(all) do
-			local rel = p:sub(#cwd + 2)
-			if
-				not rel:match("^%.git/")
-				and not rel:match("^node_modules/")
-				and not rel:match("^%.cache/")
-				and vim.fn.isdirectory(p) == 0
-			then
-				table.insert(result, rel)
-			end
-		end
-	end
-	return table.concat(result, "\n")
-end
 
 -- Parse a JSON array of line-number edits from Claude's text response.
 -- Expects envelope.result to be (or contain) a JSON array of:
