@@ -51,6 +51,25 @@ function M.parse_claude_response(raw)
 	return nil, "No Edit or Write tool call found in permission_denials"
 end
 
+-- Get cursor position and surrounding lines for normal-mode insert.
+function M.get_normal_insert_info(context_lines)
+	context_lines = context_lines or 20
+	local buf = vim.api.nvim_get_current_buf()
+	local cursor = vim.api.nvim_win_get_cursor(0)
+	local cursor_line = cursor[1] - 1 -- 0-indexed
+	local total = vim.api.nvim_buf_line_count(buf)
+	local above_start = math.max(0, cursor_line - context_lines)
+	local below_end = math.min(total, cursor_line + context_lines + 1)
+	local above = vim.api.nvim_buf_get_lines(buf, above_start, cursor_line, false)
+	local below = vim.api.nvim_buf_get_lines(buf, cursor_line + 1, below_end, false)
+	return {
+		buf = buf,
+		cursor_line = cursor_line,
+		above = table.concat(above, "\n"),
+		below = table.concat(below, "\n"),
+	}
+end
+
 function M.log(msg)
 	local f = io.open("/tmp/assist.log", "a")
 	if not f then
