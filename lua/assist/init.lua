@@ -10,7 +10,7 @@ function M.setup(opts)
 	config.setup(opts)
 end
 
-local function build_prompt(selection, user_prompt, file_path, lang, ctx)
+local function build_edit_prompt(selection, user_prompt, file_path, lang, ctx)
 	local parts = {
 		"<task>Complete or implement the following code region. You MUST apply your changes using the Edit tool — do not print the code as text.</task>",
 		string.format(
@@ -49,6 +49,165 @@ local function build_prompt(selection, user_prompt, file_path, lang, ctx)
 	local prompt = table.concat(parts, "\n")
 	utils.log(prompt)
 	return prompt
+end
+
+local function build_insert_prompt(insert_info, user_prompt, file_path, lang, ctx)
+	local parts = {
+		"<task>Generate a code snippet to insert at the cursor position. Output ONLY the new snippet using the Write tool — do not print it as text.</task>",
+		string.format("<file path=%q language=%q cursor_line=%q/>", file_path, lang, tostring(insert_info.cursor_line + 1)),
+	}
+
+	local surrounding_parts = {}
+	if insert_info.above ~= "" then
+		table.insert(surrounding_parts, string.format("<above_cursor>\n```%s\n%s\n```\n</above_cursor>", lang, insert_info.above))
+	end
+	if insert_info.below ~= "" then
+		table.insert(surrounding_parts, string.format("<below_cursor>\n```%s\n%s\n```\n</below_cursor>", lang, insert_info.below))
+	end
+	if #surrounding_parts > 0 then
+		table.insert(parts, "<surrounding_context>\n" .. table.concat(surrounding_parts, "\n") .. "\n</surrounding_context>")
+	end
+
+	if ctx then
+		local ctx_parts = {}
+		if ctx.enclosing_scope then
+			table.insert(ctx_parts, string.format("<enclosing_scope>\n```%s\n%s\n```\n</enclosing_scope>", lang, ctx.enclosing_scope))
+		end
+		if ctx.imports then
+			table.insert(ctx_parts, string.format("<imports>\n```%s\n%s\n```\n</imports>", lang, ctx.imports))
+		end
+		if ctx.diagnostics then
+			table.insert(ctx_parts, string.format("<diagnostics>\n%s\n</diagnostics>", ctx.diagnostics))
+		end
+		if ctx.doc_symbols then
+			table.insert(ctx_parts, string.format("<doc_symbols>\n%s\n</doc_symbols>", ctx.doc_symbols))
+		end
+		if #ctx_parts > 0 then
+			table.insert(parts, "<context>\n" .. table.concat(ctx_parts, "\n") .. "\n</context>")
+		end
+	end
+
+	table.insert(parts, string.format("<instructions>%s</instructions>", user_prompt))
+	local prompt = table.concat(parts, "\n")
+	utils.log(prompt)
+	return prompt
+end
+
+local function run_assist_insert(insert_info, user_prompt)
+	local buf = insert_info.buf
+	local file_path = vim.api.nvim_buf_get_name(buf)
+	local lang = vim.bo[buf].filetype
+	local opts = config.options
+	local ctx_cfg = opts.context or {}
+	local cursor_line = insert_info.cursor_line
+
+	local spinner_frames = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
+	local text = spinner_frames[1] .. " Generating..."
+	local mark_id = vim.api.nvim_buf_set_extmark(buf, ns, cursor_line, 0, {
+		virt_lines = { { { text, "Comment" } } },
+	})
+
+	local frame = 1
+	local uv = vim.uv or vim.loop
+	local timer = uv.new_timer()
+	timer:start(80, 80, vim.schedule_wrap(function()
+		frame = (frame % #spinner_frames) + 1
+		local animated = spinner_frames[frame] .. " Generating..."
+		local pos = vim.api.nvim_buf_get_extmark_by_id(buf, ns, mark_id, {})
+		if #pos > 0 then
+			vim.api.nvim_buf_set_extmark(buf, ns, pos[1], pos[2], {
+				id = mark_id,
+				virt_lines = { { { animated, "Comment" } } },
+			})
+		end
+	end))
+
+	local function stop_loading()
+		if not timer:is_closing() then
+			timer:stop()
+			timer:close()
+		end
+		vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+	end
+
+	local function start_job(ctx)
+		local prompt = build_insert_prompt(insert_info, user_prompt, file_path, lang, ctx)
+		local stdout_lines = {}
+		local stderr_lines = {}
+
+		local job_id = vim.fn.jobstart({ opts.claude_cmd, "--print", "--output-format", opts.output_format, prompt }, {
+			stdout_buffered = false,
+			stderr_buffered = false,
+			on_stdout = function(_, lines)
+				for _, line in ipairs(lines) do
+					if line ~= "" then
+						table.insert(stdout_lines, line)
+					end
+				end
+			end,
+			on_stderr = function(_, lines)
+				for _, line in ipairs(lines) do
+					if line ~= "" then
+						table.insert(stderr_lines, line)
+					end
+				end
+			end,
+			on_exit = function(_, code)
+				vim.schedule(function()
+					local mark_pos = vim.api.nvim_buf_get_extmark_by_id(buf, ns, mark_id, {})
+					stop_loading()
+
+					if code ~= 0 then
+						local stderr_out = table.concat(stderr_lines, "\n")
+						vim.notify(
+							"[assist.nvim] claude exited with code "
+								.. code
+								.. (stderr_out ~= "" and (": " .. stderr_out) or ""),
+							vim.log.levels.ERROR
+						)
+						return
+					end
+
+					local raw = table.concat(stdout_lines, "\n")
+					local result, err = utils.parse_claude_response(raw)
+					if err then
+						vim.notify("[assist.nvim] " .. err, vim.log.levels.ERROR)
+						return
+					end
+
+					-- Insert after the cursor line (using tracked mark position if available)
+					local insert_after = (mark_pos[1] or cursor_line)
+					local new_lines = vim.split(result, "\n", { plain = true })
+					vim.api.nvim_buf_set_lines(buf, insert_after + 1, insert_after + 1, false, new_lines)
+					vim.notify("[assist.nvim] Done.", vim.log.levels.INFO)
+				end)
+			end,
+		})
+
+		if job_id <= 0 then
+			stop_loading()
+			vim.notify("[assist.nvim] Failed to start claude (job_id=" .. job_id .. ")", vim.log.levels.ERROR)
+			return
+		end
+
+		vim.fn.chanclose(job_id, "stdin")
+	end
+
+	if ctx_cfg.treesitter or ctx_cfg.lsp then
+		context.gather(buf, cursor_line, cursor_line, ctx_cfg.lsp_timeout_ms or 2000, function(ctx)
+			if not ctx_cfg.treesitter then
+				ctx.enclosing_scope = nil
+				ctx.imports = nil
+			end
+			if not ctx_cfg.lsp then
+				ctx.diagnostics = nil
+				ctx.doc_symbols = nil
+			end
+			start_job(ctx)
+		end)
+	else
+		start_job(nil)
+	end
 end
 
 local function run_assist_selection(selection, user_prompt)
@@ -107,7 +266,7 @@ local function run_assist_selection(selection, user_prompt)
 	end
 
 	local function start_job(ctx)
-		local prompt = build_prompt(selection, user_prompt, file_path, lang, ctx)
+		local prompt = build_edit_prompt(selection, user_prompt, file_path, lang, ctx)
 		local stdout_lines = {}
 		local stderr_lines = {}
 
@@ -192,7 +351,8 @@ local function run_assist_selection(selection, user_prompt)
 	end
 end
 
-local function prompt_and_run(selection)
+-- on_submit receives the user's prompt string
+local function prompt_and_run(title, on_submit)
 	local width = 60
 	local height = 8
 	local buf = vim.api.nvim_create_buf(false, true)
@@ -209,7 +369,7 @@ local function prompt_and_run(selection)
 		row = math.floor((ui.height - height) / 2),
 		style = "minimal",
 		border = "rounded",
-		title = " Assist Prompt ",
+		title = title,
 		title_pos = "center",
 	})
 
@@ -229,7 +389,7 @@ local function prompt_and_run(selection)
 			return
 		end
 		vim.notify("[assist.nvim] Running claude...", vim.log.levels.INFO)
-		run_assist_selection(selection, input)
+		on_submit(input)
 	end
 
 	local map_opts = { noremap = true, silent = true, buffer = buf }
@@ -244,7 +404,16 @@ function M.assist_visual_selection(line1, line2)
 		vim.notify("[assist.nvim] No text selected.", vim.log.levels.WARN)
 		return
 	end
-	prompt_and_run(selection)
+	prompt_and_run(" Assist Prompt ", function(input)
+		run_assist_selection(selection, input)
+	end)
+end
+
+function M.assist_normal()
+	local insert_info = utils.get_normal_insert_info()
+	prompt_and_run(" Assist Insert ", function(input)
+		run_assist_insert(insert_info, input)
+	end)
 end
 
 return M
