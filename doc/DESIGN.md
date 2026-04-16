@@ -49,3 +49,23 @@ The flow is similar, but the user triggers it from normal mode which pulls up th
 In this case, changes can be proposed to different regions of the project and multiple edits may be proposed.
 The proposed changes populate a quickfix list, which the user can cycle through. Upon selecting a quickfix change entry, a diff view opens to display the change and prompts the user to accept or reject the change.
 The user can also edit the change in the diff view before accepting to apply the change.
+
+### Extended Prompt Autocomplete Features
+
+- File context autocomplete (when using @ symbol) similar to how claude code autocomplete works
+
+* Attach prompt to a specific conversation
+* Send prompt to a specific subagent
+* Reference skills
+
+## To Do
+- [ ] File context autocomplete via `@` symbol in the prompt dialog
+- [ ] Attach a prompt to a specific conversation (conversation continuity)
+- [ ] Route a prompt to a specific subagent
+- [ ] Skill references in the prompt
+- [ ] Multi-file mode: support accepting/rejecting all changes at once
+- [ ] Show token usage / cost estimate after each run
+- [ ] Configurable keybindings for accept/reject in diff view
+- [ ] Single-file mode: support non-visual (cursor-word or whole-buffer) selection
+
+## Notes

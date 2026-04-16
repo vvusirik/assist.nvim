@@ -23,32 +23,68 @@ function M.replace_lines(buf, start_line, end_line, new_text)
 	vim.api.nvim_buf_set_lines(buf, start_line, end_line + 1, false, new_lines)
 end
 
--- Extract the replacement from claude's JSON response.
--- Claude attempts an Edit or Write tool call which lands in permission_denials
--- since the subprocess has no write access. We pull the new content from that denial.
-function M.parse_claude_response(raw)
+-- Return a newline-separated list of project-relative file paths.
+-- Uses git ls-files when available, otherwise globs for non-hidden files.
+function M.get_file_tree(cwd)
+	local result = vim.fn.systemlist("git -C " .. vim.fn.shellescape(cwd) .. " ls-files 2>/dev/null")
+	if vim.v.shell_error ~= 0 or #result == 0 then
+		local all = vim.fn.globpath(cwd, "**/*", false, true)
+		result = {}
+		for _, p in ipairs(all) do
+			local rel = p:sub(#cwd + 2)
+			if
+				not rel:match("^%.git/")
+				and not rel:match("^node_modules/")
+				and not rel:match("^%.cache/")
+				and vim.fn.isdirectory(p) == 0
+			then
+				table.insert(result, rel)
+			end
+		end
+	end
+	return table.concat(result, "\n")
+end
+
+-- Parse a JSON array of line-number edits from Claude's text response.
+-- Expects envelope.result to be (or contain) a JSON array of:
+--   { file_path, start_line, end_line, new_content }
+-- Returns list of edit tables or nil, err.
+function M.parse_line_edits(raw)
 	local ok, envelope = pcall(vim.json.decode, raw)
 	if not ok or not envelope then
 		return nil, "Failed to parse CLI JSON envelope"
 	end
-
-	local denials = envelope.permission_denials
-	if not denials or #denials == 0 then
-		return nil, "No permission_denials in response (did Claude attempt an Edit?)"
+	local text = envelope.result
+	if not text or text == "" then
+		return nil, "No result text in response"
 	end
-
-	for _, denial in ipairs(denials) do
-		local input = denial.tool_input
-		if input then
-			if denial.tool_name == "Edit" and input.new_string then
-				return input.new_string, nil
-			elseif denial.tool_name == "Write" and input.content then
-				return input.content, nil
-			end
+	-- Strip a markdown code fence if Claude wrapped the JSON
+	text = text:match("```[^\n]*\n(.-)\n```$") or text
+	text = vim.trim(text)
+	local ok2, parsed = pcall(vim.json.decode, text)
+	if not ok2 or type(parsed) ~= "table" then
+		return nil, "Response is not a valid JSON array"
+	end
+	local edits = {}
+	for _, e in ipairs(parsed) do
+		if
+			type(e.file_path) == "string"
+			and type(e.start_line) == "number"
+			and type(e.end_line) == "number"
+			and type(e.new_content) == "string"
+		then
+			table.insert(edits, {
+				file_path = e.file_path,
+				start_line = math.floor(e.start_line),
+				end_line = math.floor(e.end_line),
+				new_content = e.new_content,
+			})
 		end
 	end
-
-	return nil, "No Edit or Write tool call found in permission_denials"
+	if #edits == 0 then
+		return nil, "No valid line-number edits found in response"
+	end
+	return edits, nil
 end
 
 -- Get cursor position and surrounding lines for normal-mode insert.
@@ -91,10 +127,27 @@ function M.parse_tool_uses_from_stream(raw)
 			end
 		end
 	end
-	if #results == 0 then
-		return nil, "No Edit or Write tool_use blocks found in stream"
+end
+
+-- Apply a line-number edit to a full-file string.
+-- start_line and end_line are 1-indexed inclusive line numbers.
+-- Returns the new full-file string, or nil + err if the range is invalid.
+function M.apply_line_edit(original_full, start_line, end_line, new_content)
+	local lines = vim.split(original_full, "\n", { plain = true })
+	if start_line < 1 or end_line > #lines or start_line > end_line then
+		return nil, string.format("line range %d-%d out of bounds (file has %d lines)", start_line, end_line, #lines)
 	end
-	return results, nil
+	local result = {}
+	for i = 1, start_line - 1 do
+		result[#result + 1] = lines[i]
+	end
+	for _, l in ipairs(vim.split(new_content, "\n", { plain = true })) do
+		result[#result + 1] = l
+	end
+	for i = end_line + 1, #lines do
+		result[#result + 1] = lines[i]
+	end
+	return table.concat(result, "\n"), nil
 end
 
 -- Read a file's contents, returning "" if the file does not exist.
@@ -106,17 +159,6 @@ function M.read_file_or_empty(path)
 	local content = f:read("*a")
 	f:close()
 	return content
-end
-
--- Apply an Edit tool replacement to file content.
--- Finds the first plain occurrence of old_string and replaces it with new_string.
--- Returns result, nil or nil, err.
-function M.apply_edit_to_content(original, old_string, new_string)
-	local start_idx, end_idx = original:find(old_string, 1, true)
-	if not start_idx then
-		return nil, "old_string not found in file content"
-	end
-	return original:sub(1, start_idx - 1) .. new_string .. original:sub(end_idx + 1), nil
 end
 
 function M.log(msg)

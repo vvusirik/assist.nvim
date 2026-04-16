@@ -2,7 +2,6 @@ local M = {}
 
 M.defaults = {
 	claude_cmd = "claude",
-	output_format = "json",
 	context = {
 		treesitter = true,
 		lsp = true,
