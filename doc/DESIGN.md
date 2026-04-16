@@ -41,3 +41,11 @@ claude --print --output-format json "Complete or implement the code for the foll
 ```
 
 3. assist.nvim replaces the highlight region with the output from claude
+
+### Multi-Edit
+
+assist.nvim also supports larger changes that span multiple files.
+The flow is similar, but the user triggers it from normal mode which pulls up the prompt dialog.
+In this case, changes can be proposed to different regions of the project and multiple edits may be proposed.
+The proposed changes populate a quickfix list, which the user can cycle through. Upon selecting a quickfix change entry, a diff view opens to display the change and prompts the user to accept or reject the change.
+The user can also edit the change in the diff view before accepting to apply the change.

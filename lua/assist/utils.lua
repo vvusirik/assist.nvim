@@ -70,6 +70,55 @@ function M.get_normal_insert_info(context_lines)
 	}
 end
 
+-- Parse all Edit/Write tool_use blocks from a stream-json response.
+-- stream-json emits one JSON object per line; tool calls appear as tool_use
+-- content blocks inside type="assistant" message events.
+-- Returns a list of { name, input } or nil, err.
+function M.parse_tool_uses_from_stream(raw)
+	local results = {}
+	for line in (raw .. "\n"):gmatch("([^\n]*)\n") do
+		if line ~= "" then
+			local ok, event = pcall(vim.json.decode, line)
+			if ok and event and event.type == "assistant" then
+				local content = event.message and event.message.content
+				if type(content) == "table" then
+					for _, block in ipairs(content) do
+						if block.type == "tool_use" and (block.name == "Edit" or block.name == "Write") then
+							table.insert(results, { name = block.name, input = block.input })
+						end
+					end
+				end
+			end
+		end
+	end
+	if #results == 0 then
+		return nil, "No Edit or Write tool_use blocks found in stream"
+	end
+	return results, nil
+end
+
+-- Read a file's contents, returning "" if the file does not exist.
+function M.read_file_or_empty(path)
+	local f = io.open(path, "r")
+	if not f then
+		return ""
+	end
+	local content = f:read("*a")
+	f:close()
+	return content
+end
+
+-- Apply an Edit tool replacement to file content.
+-- Finds the first plain occurrence of old_string and replaces it with new_string.
+-- Returns result, nil or nil, err.
+function M.apply_edit_to_content(original, old_string, new_string)
+	local start_idx, end_idx = original:find(old_string, 1, true)
+	if not start_idx then
+		return nil, "old_string not found in file content"
+	end
+	return original:sub(1, start_idx - 1) .. new_string .. original:sub(end_idx + 1), nil
+end
+
 function M.log(msg)
 	local f = io.open("/tmp/assist.log", "a")
 	if not f then
