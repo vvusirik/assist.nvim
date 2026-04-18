@@ -18,6 +18,8 @@ This would cover common use cases such as:
 - Trigger a completion at your cursor location. Note that this one is not even supported out of the box with Claude Code or Codex CLI tools since they don't integrate natively with the editor, it's a special on demand feature enabled by this plugin.
 - Document a particular function / class / snippet with a docstring or comments
 
+Note that this plugin primarily tries to tackle workflows for small and medium size requests. A dedicated window for agentic CLI tools does still have its place for large sweeping changes that require some back and forth deliberation with an agent, but for small and medium requests that are well specified where the user can be confident in the agent's ability to one shot the request, there's no reason to go to another window when you can make the request in the editor.
+
 As part of the design philosophy, assist works asynchronously in the background so that you can continue your work even as the agent is working.
 
 ## Comparison to Alternatives
@@ -102,9 +104,11 @@ This feature works much like the Selection Edit workflow, but can be triggered f
 
 - [ ] File context autocomplete via `@` symbol in the prompt dialog
 - [ ] Treesitter AST search
+- [ ] Include line numbers / code region
 
 ### Claude
 
+- [ ] Model selector
 - [ ] Attach a prompt to a specific conversation (conversation continuity)
 - [ ] Route a prompt to a specific subagent
 - [ ] Skill references in the prompt
@@ -118,6 +122,9 @@ This feature works much like the Selection Edit workflow, but can be triggered f
 ### Features
 
 - [ ] Ask a question about a particular region or file of code inline get the response back in an inline buffer
-- [ ]
+- [ ] Conversation / message history
 
 ## Notes
+
+- Multi file edits are tricky to do async because you don't know if you will work on regions of the code that the agent will also touch.
+  - To reconcile this, we may want to have it write to a separate worktree branch that can be merged in as a post hook

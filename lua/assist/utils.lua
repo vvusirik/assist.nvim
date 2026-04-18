@@ -125,32 +125,31 @@ function M.get_visual_selection(line1, line2)
 	}
 end
 
--- Extract the replacement from claude's JSON response.
--- Claude attempts an Edit or Write tool call which lands in permission_denials
--- since the subprocess has no write access. We pull the new content from that denial.
-function M.parse_claude_response(raw)
-	local ok, envelope = pcall(vim.json.decode, raw)
-	if not ok or not envelope then
-		return nil, "Failed to parse CLI JSON envelope"
-	end
-
-	local denials = envelope.permission_denials
-	if not denials or #denials == 0 then
-		return nil, "No permission_denials in response (did Claude attempt an Edit?)"
-	end
-
-	for _, denial in ipairs(denials) do
-		local input = denial.tool_input
-		if input then
-			if denial.tool_name == "Edit" and input.new_string then
-				return input.new_string, nil
-			elseif denial.tool_name == "Write" and input.content then
-				return input.content, nil
+-- Extract the first Write/Edit tool_use from a stream-json response.
+-- Returns { content, old_string } where old_string is only present for Edit,
+-- or nil + err string on failure.
+function M.parse_tool_use_content(raw)
+	for line in (raw .. "\n"):gmatch("([^\n]*)\n") do
+		if line ~= "" then
+			local ok, event = pcall(vim.json.decode, line)
+			if ok and event and event.type == "assistant" then
+				local content = event.message and event.message.content
+				if type(content) == "table" then
+					for _, block in ipairs(content) do
+						if block.type == "tool_use" then
+							local input = block.input or {}
+							if block.name == "Write" and input.content then
+								return { content = input.content }, nil
+							elseif block.name == "Edit" and input.new_string then
+								return { content = input.new_string, old_string = input.old_string }, nil
+							end
+						end
+					end
+				end
 			end
 		end
 	end
-
-	return nil, "No Edit or Write tool call found in permission_denials"
+	return nil, "No Write or Edit tool_use block found in stream-json response"
 end
 
 -- Replace lines in buffer with new content (as a list of lines)
@@ -199,48 +198,6 @@ function M.parse_line_edits(raw)
 		return nil, "No valid line-number edits found in response"
 	end
 	return edits, nil
-end
-
--- Get cursor position and surrounding lines for normal-mode insert.
-function M.get_normal_insert_info(context_lines)
-	context_lines = context_lines or 20
-	local buf = vim.api.nvim_get_current_buf()
-	local cursor = vim.api.nvim_win_get_cursor(0)
-	local cursor_line = cursor[1] - 1 -- 0-indexed
-	local total = vim.api.nvim_buf_line_count(buf)
-	local above_start = math.max(0, cursor_line - context_lines)
-	local below_end = math.min(total, cursor_line + context_lines + 1)
-	local above = vim.api.nvim_buf_get_lines(buf, above_start, cursor_line, false)
-	local below = vim.api.nvim_buf_get_lines(buf, cursor_line + 1, below_end, false)
-	return {
-		buf = buf,
-		cursor_line = cursor_line,
-		above = table.concat(above, "\n"),
-		below = table.concat(below, "\n"),
-	}
-end
-
--- Parse all Edit/Write tool_use blocks from a stream-json response.
--- stream-json emits one JSON object per line; tool calls appear as tool_use
--- content blocks inside type="assistant" message events.
--- Returns a list of { name, input } or nil, err.
-function M.parse_tool_uses_from_stream(raw)
-	local results = {}
-	for line in (raw .. "\n"):gmatch("([^\n]*)\n") do
-		if line ~= "" then
-			local ok, event = pcall(vim.json.decode, line)
-			if ok and event and event.type == "assistant" then
-				local content = event.message and event.message.content
-				if type(content) == "table" then
-					for _, block in ipairs(content) do
-						if block.type == "tool_use" and (block.name == "Edit" or block.name == "Write") then
-							table.insert(results, { name = block.name, input = block.input })
-						end
-					end
-				end
-			end
-		end
-	end
 end
 
 -- Apply a line-number edit to a full-file string.
