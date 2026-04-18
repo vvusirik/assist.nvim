@@ -224,50 +224,9 @@ local function run_multi(user_prompt)
 end
 
 function M.assist_multi()
-	local width = 60
-	local height = 8
-	local buf = vim.api.nvim_create_buf(false, true)
-
-	vim.bo[buf].buftype = "nofile"
-	vim.bo[buf].swapfile = false
-
-	local ui = vim.api.nvim_list_uis()[1]
-	local win = vim.api.nvim_open_win(buf, true, {
-		relative = "editor",
-		width = width,
-		height = height,
-		col = math.floor((ui.width - width) / 2),
-		row = math.floor((ui.height - height) / 2),
-		style = "minimal",
-		border = "rounded",
-		title = " Assist Multi ",
-		title_pos = "center",
-	})
-
-	vim.wo[win].wrap = true
-	vim.cmd("startinsert")
-
-	local function close()
-		if vim.api.nvim_win_is_valid(win) then
-			vim.api.nvim_win_close(win, true)
-		end
-	end
-
-	local function submit()
-		local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-		local input = vim.trim(table.concat(lines, "\n"))
-		close()
-		if input == "" then
-			return
-		end
-		vim.notify("[assist.nvim] Running claude...", vim.log.levels.INFO)
+	utils.prompt_and_run(" Assist Multi ", function(input)
 		run_multi(input)
-	end
-
-	local map_opts = { noremap = true, silent = true, buffer = buf }
-	vim.keymap.set("n", "<CR>", submit, map_opts)
-	vim.keymap.set("n", "q", close, map_opts)
-	vim.keymap.set("n", "<Esc>", close, map_opts)
+	end)
 end
 
 return M

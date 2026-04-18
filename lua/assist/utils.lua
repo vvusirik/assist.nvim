@@ -1,4 +1,112 @@
+local config = require("assist.config")
+
 local M = {}
+
+local ns = vim.api.nvim_create_namespace("assist_loading")
+local SPINNER_FRAMES = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
+
+-- Start an animated spinner on one or more extmarks.
+-- positions: list of { line = N, above = bool (default false) }
+-- message:   text shown after the spinner frame (e.g. "Generating...")
+-- Returns a handle with:
+--   handle.stop()       -- stops the timer and clears the loading namespace
+--   handle.positions()  -- current { line, col } for each mark, in input order
+function M.start_spinner(buf, positions, message)
+	local mark_ids = {}
+	for i, pos in ipairs(positions) do
+		mark_ids[i] = vim.api.nvim_buf_set_extmark(buf, ns, pos.line, 0, {
+			virt_lines = { { { SPINNER_FRAMES[1] .. " " .. message, "Comment" } } },
+			virt_lines_above = pos.above or false,
+		})
+	end
+
+	local frame = 1
+	local uv = vim.uv or vim.loop
+	local timer = uv.new_timer()
+	timer:start(
+		80,
+		80,
+		vim.schedule_wrap(function()
+			frame = (frame % #SPINNER_FRAMES) + 1
+			local animated = SPINNER_FRAMES[frame] .. " " .. message
+			for i, id in ipairs(mark_ids) do
+				local cur = vim.api.nvim_buf_get_extmark_by_id(buf, ns, id, {})
+				if #cur > 0 then
+					vim.api.nvim_buf_set_extmark(buf, ns, cur[1], cur[2], {
+						id = id,
+						virt_lines = { { { animated, "Comment" } } },
+						virt_lines_above = positions[i].above or false,
+					})
+				end
+			end
+		end)
+	)
+
+	return {
+		stop = function()
+			if not timer:is_closing() then
+				timer:stop()
+				timer:close()
+			end
+			vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+		end,
+		positions = function()
+			local result = {}
+			for i, id in ipairs(mark_ids) do
+				result[i] = vim.api.nvim_buf_get_extmark_by_id(buf, ns, id, {})
+			end
+			return result
+		end,
+	}
+end
+
+-- on_submit receives the user's prompt string
+function M.prompt_and_run(title, on_submit)
+	local opts = config.options
+	local width = opts.prompt_buf.width
+	local height = opts.prompt_buf.height
+	local buf = vim.api.nvim_create_buf(false, true)
+
+	vim.bo[buf].buftype = "nofile"
+	vim.bo[buf].swapfile = false
+
+	local ui = vim.api.nvim_list_uis()[1]
+	local win = vim.api.nvim_open_win(buf, true, {
+		relative = "editor",
+		width = width,
+		height = height,
+		col = math.floor((ui.width - width) / 2),
+		row = math.floor((ui.height - height) / 2),
+		style = "minimal",
+		border = "rounded",
+		title = title,
+		title_pos = "center",
+	})
+
+	vim.cmd("startinsert")
+
+	local function close()
+		if vim.api.nvim_win_is_valid(win) then
+			vim.api.nvim_win_close(win, true)
+		end
+	end
+
+	local function submit()
+		local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+		local input = vim.trim(table.concat(lines, "\n"))
+		close()
+		if input == "" then
+			return
+		end
+		vim.notify("[assist.nvim] Running claude...", vim.log.levels.INFO)
+		on_submit(input)
+	end
+
+	local map_opts = { noremap = true, silent = true, buffer = buf }
+	vim.keymap.set("n", "<CR>", submit, map_opts)
+	vim.keymap.set("n", "q", close, map_opts)
+	vim.keymap.set("n", "<Esc>", close, map_opts)
+end
 
 -- Get the visual selection range and text from the current buffer.
 -- line1 and line2 are 1-indexed and come from the command range — more
@@ -17,12 +125,39 @@ function M.get_visual_selection(line1, line2)
 	}
 end
 
+-- Extract the replacement from claude's JSON response.
+-- Claude attempts an Edit or Write tool call which lands in permission_denials
+-- since the subprocess has no write access. We pull the new content from that denial.
+function M.parse_claude_response(raw)
+	local ok, envelope = pcall(vim.json.decode, raw)
+	if not ok or not envelope then
+		return nil, "Failed to parse CLI JSON envelope"
+	end
+
+	local denials = envelope.permission_denials
+	if not denials or #denials == 0 then
+		return nil, "No permission_denials in response (did Claude attempt an Edit?)"
+	end
+
+	for _, denial in ipairs(denials) do
+		local input = denial.tool_input
+		if input then
+			if denial.tool_name == "Edit" and input.new_string then
+				return input.new_string, nil
+			elseif denial.tool_name == "Write" and input.content then
+				return input.content, nil
+			end
+		end
+	end
+
+	return nil, "No Edit or Write tool call found in permission_denials"
+end
+
 -- Replace lines in buffer with new content (as a list of lines)
 function M.replace_lines(buf, start_line, end_line, new_text)
 	local new_lines = vim.split(new_text, "\n", { plain = true })
 	vim.api.nvim_buf_set_lines(buf, start_line, end_line + 1, false, new_lines)
 end
-
 
 -- Parse a JSON array of line-number edits from Claude's text response.
 -- Expects envelope.result to be (or contain) a JSON array of:
