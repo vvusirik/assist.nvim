@@ -4,15 +4,16 @@ if vim.g.loaded_assist then
 end
 vim.g.loaded_assist = true
 
-local assist = require("assist")
+local select = require("assist.select")
+local insert = require("assist.insert")
 local multi = require("assist.multi")
 
-vim.api.nvim_create_user_command("AssistPrompt", function(opts)
-	assist.assist_visual_selection(opts.line1, opts.line2)
+vim.api.nvim_create_user_command("AssistSelect", function(opts)
+	select.assist_visual_selection(opts.line1, opts.line2)
 end, { range = true, desc = "Prompt AI to implement the selected code region" })
 
 vim.api.nvim_create_user_command("AssistInsert", function()
-	assist.assist_normal()
+	insert.assist_normal()
 end, { desc = "Prompt AI to generate and insert a snippet at the cursor" })
 
 vim.api.nvim_create_user_command("AssistMulti", function()
