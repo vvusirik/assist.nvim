@@ -7,7 +7,7 @@ function M.setup(opts)
 	config.setup(opts)
 end
 
-local function build_edit_prompt(selection, user_prompt, file_path, lang)
+local function build_edit_prompt(selection, user_prompt, file_path, lang, buf_content)
 	local parts = {
 		"<task>Edit the following code region according to the instructions. You MUST apply your changes using the Edit tool — do not print the code as text.</task>",
 		string.format(
@@ -17,9 +17,12 @@ local function build_edit_prompt(selection, user_prompt, file_path, lang)
 			tostring(selection.start_line + 1),
 			tostring(selection.end_line + 1)
 		),
-		string.format("<selection>\n```%s\n%s\n```\n</selection>", lang, selection.text),
-		string.format("<instructions>%s</instructions>", user_prompt),
 	}
+	if buf_content then
+		table.insert(parts, string.format("<file_content>\n```%s\n%s\n```\n</file_content>", lang, buf_content))
+	end
+	table.insert(parts, string.format("<selection>\n```%s\n%s\n```\n</selection>", lang, selection.text))
+	table.insert(parts, string.format("<instructions>%s</instructions>", user_prompt))
 
 	local prompt = table.concat(parts, "\n")
 	utils.log(prompt)
@@ -37,7 +40,8 @@ local function run_assist_selection(selection, user_prompt)
 		{ line = selection.end_line },
 	}, "Implementing...")
 
-	local prompt = build_edit_prompt(selection, user_prompt, file_path, lang)
+	local buf_content = vim.bo[buf].modified and table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n") or nil
+	local prompt = build_edit_prompt(selection, user_prompt, file_path, lang, buf_content)
 	local stdout_lines = {}
 	local stderr_lines = {}
 
@@ -117,13 +121,6 @@ function M.assist_visual_selection(line1, line2)
 	if selection.text == "" then
 		vim.notify("[assist.nvim] No text selected.", vim.log.levels.WARN)
 		return
-	end
-	if vim.bo[selection.buf].modified then
-		local choice = vim.fn.confirm("Buffer has unsaved changes. Save before continuing?", "&Yes\n&No", 1)
-		if choice ~= 1 then
-			return
-		end
-		vim.cmd("write")
 	end
 	utils.prompt_and_run(" Assist Select ", function(input)
 		run_assist_selection(selection, input)

@@ -10,8 +10,8 @@ local function get_normal_insert_info()
 	return { buf = buf, cursor_line = cursor_line }
 end
 
-local function build_insert_prompt(insert_info, user_prompt, file_path, lang)
-	local prompt = table.concat({
+local function build_insert_prompt(insert_info, user_prompt, file_path, lang, buf_content)
+	local parts = {
 		"<task>Generate a code snippet to insert after the cursor line based on the provided instructions. You MUST use the Edit tool.</task>",
 		string.format(
 			"<file path=%q language=%q cursor_line=%q/>",
@@ -19,8 +19,12 @@ local function build_insert_prompt(insert_info, user_prompt, file_path, lang)
 			lang,
 			tostring(insert_info.cursor_line + 1)
 		),
-		string.format("<instructions>%s</instructions>", user_prompt),
-	}, "\n")
+	}
+	if buf_content then
+		table.insert(parts, string.format("<file_content>\n```%s\n%s\n```\n</file_content>", lang, buf_content))
+	end
+	table.insert(parts, string.format("<instructions>%s</instructions>", user_prompt))
+	local prompt = table.concat(parts, "\n")
 	utils.log(prompt)
 	return prompt
 end
@@ -34,7 +38,8 @@ local function run_assist_insert(insert_info, user_prompt)
 
 	local spinner = utils.start_spinner(buf, { { line = cursor_line } }, "Generating...")
 
-	local prompt = build_insert_prompt(insert_info, user_prompt, file_path, lang)
+	local buf_content = vim.bo[buf].modified and table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n") or nil
+	local prompt = build_insert_prompt(insert_info, user_prompt, file_path, lang, buf_content)
 	local stdout_lines = {}
 	local stderr_lines = {}
 
@@ -114,13 +119,6 @@ end
 
 function M.assist_normal()
 	local insert_info = get_normal_insert_info()
-	if vim.bo[insert_info.buf].modified then
-		local choice = vim.fn.confirm("Buffer has unsaved changes. Save before continuing?", "&Yes\n&No", 1)
-		if choice ~= 1 then
-			return
-		end
-		vim.cmd("write")
-	end
 	utils.prompt_and_run(" Assist Insert ", function(input)
 		run_assist_insert(insert_info, input)
 	end)
