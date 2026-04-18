@@ -12,8 +12,7 @@ end
 
 local function build_insert_prompt(insert_info, user_prompt, file_path, lang)
 	local prompt = table.concat({
-		"<task>Generate a code snippet to insert after the cursor line. "
-			.. "Use the Edit tool and put ONLY the new snippet in new_string — do not include any existing file content.</task>",
+		"<task>Generate a code snippet to insert after the cursor line based on the provided instructions. You MUST use the Edit tool.</task>",
 		string.format(
 			"<file path=%q language=%q cursor_line=%q/>",
 			file_path,

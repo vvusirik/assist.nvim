@@ -19,8 +19,3 @@ end, { desc = "Prompt AI to generate and insert a snippet at the cursor" })
 vim.api.nvim_create_user_command("AssistMulti", function()
 	multi.assist_multi()
 end, { desc = "Propose multi-file AI edits via quickfix + diff review" })
-
--- TODO: Commands that have not been implemented yet
-vim.api.nvim_create_user_command("AssistComplete", function()
-	require("assist.complete").assist_complete()
-end, { desc = "Complete code at the cursor" })
