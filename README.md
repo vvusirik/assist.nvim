@@ -1,6 +1,6 @@
-# Assist
+# assist.nvim
 
-**This plugin is a work in progress**
+**This plugin is a work in progress. Use at your own risk!**
 
 assist.nvim enables inline prompting and interaction with AI agents without taking you out of neovim, so you can maintain a flow state in the editor.
 Many AI agent tools like Claude Code, OpenAI codex, and Cursor operate by having a separate window for interfacing with an agent via natural language chat.
@@ -11,7 +11,10 @@ The goal here is to extract most of the useful value that AI tools provide witho
 As part of the design philosophy, assist works asynchronously so that you can continue your work even as the agent is working.
 These subtle UX tweaks enable users to stay present and hands on in the codebase, so they can still do the fun parts of coding and maintain their mental model of the code while outsourcing the tedious bits.
 
-This would cover common use cases such as:
+This plugin focuses on small-to-medium, well-specified requests that an agent can one-shot. 
+For large, open-ended changes requiring back-and-forth deliberation, a dedicated agentic CLI window is still the right tool.
+
+## Features
 
 - **Insert** - prompt a snippet to generate at the cursor location
 - **Edit** - visual select a code block and prompt a change to the code region
@@ -21,5 +24,5 @@ This would cover common use cases such as:
 - **Completion** - trigger an on-demand completion at your cursor, without leaving the editor
 - **Document** - generate a docstring or comments for a function, class, or snippet
 
-This plugin focuses on small-to-medium, well-specified requests that an agent can one-shot. 
-For large, open-ended changes requiring back-and-forth deliberation, a dedicated agentic CLI window is still the right tool.
+## Setup
+## Acknowledgements
