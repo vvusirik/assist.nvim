@@ -40,7 +40,10 @@ local function run_assist_selection(selection, user_prompt)
 		{ line = selection.end_line },
 	}, "Implementing...")
 
-	local buf_content = vim.bo[buf].modified and table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n") or nil
+	local buf_content = nil
+	if vim.bo[buf].modified then
+		buf_content = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n")
+	end
 	local prompt = build_edit_prompt(selection, user_prompt, file_path, lang, buf_content)
 	local stdout_lines = {}
 	local stderr_lines = {}
@@ -88,7 +91,7 @@ local function run_assist_selection(selection, user_prompt)
 				end
 
 				local raw = table.concat(stdout_lines, "\n")
-				local result, err = utils.parse_tool_use_content(raw)
+				local result, err = utils.parse_edit_write_tool_response(raw)
 				if err then
 					vim.notify("[assist.nvim] " .. err, vim.log.levels.ERROR)
 					return

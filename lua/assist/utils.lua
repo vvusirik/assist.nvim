@@ -70,18 +70,19 @@ function M.prompt_and_run(title, on_submit)
 	vim.bo[buf].buftype = "nofile"
 	vim.bo[buf].swapfile = false
 
-	local ui = vim.api.nvim_list_uis()[1]
 	local win = vim.api.nvim_open_win(buf, true, {
-		relative = "editor",
+		relative = "cursor",
 		width = width,
 		height = height,
-		col = math.floor((ui.width - width) / 2),
-		row = math.floor((ui.height - height) / 2),
+		col = 0,
+		row = 1,
 		style = "minimal",
 		border = "rounded",
 		title = title,
 		title_pos = "center",
 	})
+	vim.wo[win].wrap = true
+	vim.wo[win].linebreak = true
 
 	vim.cmd("startinsert")
 
@@ -98,7 +99,7 @@ function M.prompt_and_run(title, on_submit)
 		if input == "" then
 			return
 		end
-		vim.notify("[assist.nvim] Running claude...", vim.log.levels.INFO)
+		vim.notify("[assist.nvim] Running" .. title, vim.log.levels.INFO)
 		on_submit(input)
 	end
 
@@ -106,6 +107,13 @@ function M.prompt_and_run(title, on_submit)
 	vim.keymap.set("n", "<CR>", submit, map_opts)
 	vim.keymap.set("n", "q", close, map_opts)
 	vim.keymap.set("n", "<Esc>", close, map_opts)
+end
+
+function M.get_normal_insert_info()
+	local buf = vim.api.nvim_get_current_buf()
+	local cursor = vim.api.nvim_win_get_cursor(0)
+	local cursor_line = cursor[1] - 1 -- 0-indexed
+	return { buf = buf, cursor_line = cursor_line }
 end
 
 -- Get the visual selection range and text from the current buffer.
@@ -128,7 +136,7 @@ end
 -- Extract the first Write/Edit tool_use from a stream-json response.
 -- Returns { content, old_string } where old_string is only present for Edit,
 -- or nil + err string on failure.
-function M.parse_tool_use_content(raw)
+function M.parse_edit_write_tool_response(raw)
 	for line in (raw .. "\n"):gmatch("([^\n]*)\n") do
 		if line ~= "" then
 			local ok, event = pcall(vim.json.decode, line)
@@ -152,73 +160,62 @@ function M.parse_tool_use_content(raw)
 	return nil, "No Write or Edit tool_use block found in stream-json response"
 end
 
+-- Collect all Edit tool_use blocks from a stream-json response.
+-- Deduplicates by (file_path, old_string) to handle Claude retrying after permission denials.
+-- Returns a list of { file_path, old_string, new_string } or nil + err string if none found.
+function M.parse_all_file_tool_uses(raw)
+	local results = {}
+	local seen = {}
+	for line in (raw .. "\n"):gmatch("([^\n]*)\n") do
+		if line ~= "" then
+			local ok, event = pcall(vim.json.decode, line)
+			if ok and event and event.type == "assistant" then
+				local content = event.message and event.message.content
+				if type(content) == "table" then
+					for _, block in ipairs(content) do
+						if block.type == "tool_use" and block.name == "Edit" then
+							local input = block.input or {}
+							if input.file_path and input.old_string and input.new_string then
+								local key = input.file_path .. "\0" .. input.old_string
+								if not seen[key] then
+									seen[key] = true
+									table.insert(results, {
+										file_path = input.file_path,
+										old_string = input.old_string,
+										new_string = input.new_string,
+									})
+								end
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+	if #results == 0 then
+		return nil, "No Edit tool_use blocks found in stream-json response"
+	end
+	return results, nil
+end
+
+-- Extract the final text answer from a stream-json response.
+-- Returns the result string or nil + err string on failure.
+function M.parse_result_text(raw)
+	for line in (raw .. "\n"):gmatch("([^\n]*)\n") do
+		if line ~= "" then
+			local ok, event = pcall(vim.json.decode, line)
+			if ok and event and event.type == "result" and not event.is_error and type(event.result) == "string" then
+				return event.result, nil
+			end
+		end
+	end
+	return nil, "No result found in stream-json response"
+end
+
 -- Replace lines in buffer with new content (as a list of lines)
 function M.replace_lines(buf, start_line, end_line, new_text)
 	local new_lines = vim.split(new_text, "\n", { plain = true })
 	vim.api.nvim_buf_set_lines(buf, start_line, end_line + 1, false, new_lines)
-end
-
--- Parse a JSON array of line-number edits from Claude's text response.
--- Expects envelope.result to be (or contain) a JSON array of:
---   { file_path, start_line, end_line, new_content }
--- Returns list of edit tables or nil, err.
-function M.parse_line_edits(raw)
-	local ok, envelope = pcall(vim.json.decode, raw)
-	if not ok or not envelope then
-		return nil, "Failed to parse CLI JSON envelope"
-	end
-	local text = envelope.result
-	if not text or text == "" then
-		return nil, "No result text in response"
-	end
-	-- Strip a markdown code fence if Claude wrapped the JSON
-	text = text:match("```[^\n]*\n(.-)\n```$") or text
-	text = vim.trim(text)
-	local ok2, parsed = pcall(vim.json.decode, text)
-	if not ok2 or type(parsed) ~= "table" then
-		return nil, "Response is not a valid JSON array"
-	end
-	local edits = {}
-	for _, e in ipairs(parsed) do
-		if
-			type(e.file_path) == "string"
-			and type(e.start_line) == "number"
-			and type(e.end_line) == "number"
-			and type(e.new_content) == "string"
-		then
-			table.insert(edits, {
-				file_path = e.file_path,
-				start_line = math.floor(e.start_line),
-				end_line = math.floor(e.end_line),
-				new_content = e.new_content,
-			})
-		end
-	end
-	if #edits == 0 then
-		return nil, "No valid line-number edits found in response"
-	end
-	return edits, nil
-end
-
--- Apply a line-number edit to a full-file string.
--- start_line and end_line are 1-indexed inclusive line numbers.
--- Returns the new full-file string, or nil + err if the range is invalid.
-function M.apply_line_edit(original_full, start_line, end_line, new_content)
-	local lines = vim.split(original_full, "\n", { plain = true })
-	if start_line < 1 or end_line > #lines or start_line > end_line then
-		return nil, string.format("line range %d-%d out of bounds (file has %d lines)", start_line, end_line, #lines)
-	end
-	local result = {}
-	for i = 1, start_line - 1 do
-		result[#result + 1] = lines[i]
-	end
-	for _, l in ipairs(vim.split(new_content, "\n", { plain = true })) do
-		result[#result + 1] = l
-	end
-	for i = end_line + 1, #lines do
-		result[#result + 1] = lines[i]
-	end
-	return table.concat(result, "\n"), nil
 end
 
 -- Read a file's contents, returning "" if the file does not exist.

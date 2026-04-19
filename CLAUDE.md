@@ -36,7 +36,7 @@ lua/assist/utils.lua       Buffer helpers + spinner + response parsing
 1. User enters a prompt via `utils.prompt_and_run()` modal.
 2. `run_assist_selection()` (or `run_assist_insert()`) builds an XML-structured prompt that includes the selection or surrounding-cursor lines and instructs Claude to emit its answer via the `Write` (insert) or `Edit` (select) tool.
 3. `utils.start_spinner()` places animated virtual lines around the affected region; `vim.fn.jobstart()` runs `claude --disallowedTools "Write Edit" --print --verbose --output-format stream-json <prompt>`.
-4. On exit: `utils.parse_tool_use_content()` walks the newline-delimited stream events, finds the first `Write`/`Edit` `tool_use` block inside an `assistant` event, and returns `input.content` / `input.new_string`. The content is then spliced into the buffer via `nvim_buf_set_lines` (insert appends after the tracked cursor mark; select replaces the tracked `[start, end]` range).
+4. On exit: `utils.parse_edit_write_tool_response()` walks the newline-delimited stream events, finds the first `Write`/`Edit` `tool_use` block inside an `assistant` event, and returns `input.content` / `input.new_string`. The content is then spliced into the buffer via `nvim_buf_set_lines` (insert appends after the tracked cursor mark; select replaces the tracked `[start, end]` range).
 
 ### Multi-file Data Flow (`:AssistMulti`)
 
@@ -56,7 +56,7 @@ lua/assist/utils.lua       Buffer helpers + spinner + response parsing
 **`diff.lua`** owns `_diff_state` (single active diff). `close_diff()` calls `tabclose` — the scratch buffer's `bufhidden=wipe` cleans it up automatically.
 
 **`utils.lua`** key functions:
-- `parse_tool_use_content()` — single-file, walks stream-json events and returns the first `Write`/`Edit` tool_use's content string
+- `parse_edit_write_tool_response()` — single-file, walks stream-json events and returns the first `Write`/`Edit` tool_use's content string
 - `parse_line_edits()` — multi-file, decodes `envelope.result` as a JSON array of line-number edits (tolerates a wrapping markdown fence)
 - `apply_line_edit()` — splices `new_content` into a full-file string over the 1-indexed inclusive `[start_line, end_line]` range
 - `start_spinner()` — shared spinner helper used by `insert.lua` and `select.lua`; returns a handle with `stop()` and `positions()`

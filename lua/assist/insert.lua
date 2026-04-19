@@ -3,13 +3,6 @@ local utils = require("assist.utils")
 
 local M = {}
 
-local function get_normal_insert_info()
-	local buf = vim.api.nvim_get_current_buf()
-	local cursor = vim.api.nvim_win_get_cursor(0)
-	local cursor_line = cursor[1] - 1 -- 0-indexed
-	return { buf = buf, cursor_line = cursor_line }
-end
-
 local function build_insert_prompt(insert_info, user_prompt, file_path, lang, buf_content)
 	local parts = {
 		"<task>Generate a code snippet to insert after the cursor line based on the provided instructions. You MUST use the Edit tool.</task>",
@@ -38,7 +31,8 @@ local function run_assist_insert(insert_info, user_prompt)
 
 	local spinner = utils.start_spinner(buf, { { line = cursor_line } }, "Generating...")
 
-	local buf_content = vim.bo[buf].modified and table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n") or nil
+	local buf_content = vim.bo[buf].modified and table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n")
+		or nil
 	local prompt = build_insert_prompt(insert_info, user_prompt, file_path, lang, buf_content)
 	local stdout_lines = {}
 	local stderr_lines = {}
@@ -89,7 +83,7 @@ local function run_assist_insert(insert_info, user_prompt)
 				local raw = table.concat(stdout_lines, "\n")
 				utils.log("=== AssistInsert exit code: " .. code)
 				utils.log("=== stdout:\n" .. raw)
-				local result, err = utils.parse_tool_use_content(raw)
+				local result, err = utils.parse_edit_write_tool_response(raw)
 				if err then
 					vim.notify("[assist.nvim] " .. err, vim.log.levels.ERROR)
 					return
@@ -118,7 +112,7 @@ local function run_assist_insert(insert_info, user_prompt)
 end
 
 function M.assist_normal()
-	local insert_info = get_normal_insert_info()
+	local insert_info = utils.get_normal_insert_info()
 	utils.prompt_and_run(" Assist Insert ", function(input)
 		run_assist_insert(insert_info, input)
 	end)
