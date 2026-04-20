@@ -1,19 +1,17 @@
 local config = require("assist.config")
 local utils = require("assist.utils")
-local diff = require("assist.diff")
+local review = require("assist.review")
 
 local M = {}
-
--- Session state: persists between quickfix population and accept/reject.
--- Cleared when a new :AssistMulti run starts.
-local _session = nil
 
 local function build_multi_prompt(user_prompt)
 	local cwd = vim.fn.getcwd()
 	local parts = {
-		"<task>Analyze the project and make all changes required by the instructions. "
-			.. "You MUST apply your changes using the Edit tool — do not print the code as text. "
-			.. "Use your tools to read and explore any files you need. ",
+		"<task>Make all changes required by the instructions to the project. "
+			.. "Use your tools to read and explore files you need for more context. "
+			.. "Apply every change using the Edit tool — one call per contiguous changed region. "
+			.. "Your Edit calls will not be executed; do not verify or retry them. "
+			.. "Do not respond with any text summary or explanation of your changes.</task>",
 		string.format("<cwd>%s</cwd>", cwd),
 		string.format("<instructions>%s</instructions>", user_prompt),
 	}
@@ -22,130 +20,64 @@ local function build_multi_prompt(user_prompt)
 	return prompt
 end
 
--- Build session state from a list of line-number edit objects.
--- Chains multiple edits to the same file in top-to-bottom order,
--- adjusting line numbers after each application to account for line count changes.
-local function build_session(line_edits)
+-- Build session state from a list of Edit tool_use objects.
+local function build_session(tool_uses)
 	local cwd = vim.fn.getcwd()
 	local changes = {}
+	local snapshots = {} -- original_full per absolute path, taken once before any edit
+	local by_path = {} -- ordered list of unique paths
+	local edits_by_path = {} -- path -> list of {old_string, new_string}
 
-	-- Group and sort edits by file, then by start_line ascending.
-	local by_path = {}
-	for _, edit in ipairs(line_edits) do
-		local path = edit.file_path
+	for _, tu in ipairs(tool_uses) do
+		local path = tu.file_path
 		if not vim.startswith(path, "/") then
 			path = cwd .. "/" .. path
 		end
-		if not by_path[path] then
-			by_path[path] = {}
+
+		if not snapshots[path] then
+			snapshots[path] = utils.read_file_or_empty(path)
+			table.insert(by_path, path)
+			edits_by_path[path] = {}
 		end
-		table.insert(by_path[path], { path = path, edit = edit })
+
+		table.insert(edits_by_path[path], { old_string = tu.old_string, new_string = tu.new_string })
 	end
 
-	-- Process each file's edits in order.
-	for path, path_edits in pairs(by_path) do
-		table.sort(path_edits, function(a, b)
-			return a.edit.start_line < b.edit.start_line
-		end)
-
-		local original_full = utils.read_file_or_empty(path)
-		local uv = vim.uv or vim.loop
-		local is_new_file = uv.fs_stat(path) == nil
+	for _, path in ipairs(by_path) do
+		local original_full = snapshots[path]
 		local current = original_full
-		local offset = 0 -- tracks cumulative line count delta from prior edits
+		local first_lnum = nil
+		local errors = {}
 
-		for _, item in ipairs(path_edits) do
-			local edit = item.edit
-			local adj_start = edit.start_line + offset
-			local adj_end = edit.end_line + offset
-
-			local change = {
-				path = path,
-				original_full = original_full,
-				is_new_file = is_new_file,
-				start_line = edit.start_line,
-				end_line = edit.end_line,
-				new_content = edit.new_content,
-			}
-
-			local result, err = utils.apply_line_edit(current, adj_start, adj_end, edit.new_content)
-			if err then
-				change.error = err
-				change.proposed_full = current
+		for _, edit in ipairs(edits_by_path[path]) do
+			local escaped = vim.pesc(edit.old_string)
+			local new_full, n = current:gsub(escaped, edit.new_string, 1)
+			if n == 0 then
+				table.insert(errors, "old_string not found: " .. edit.old_string:sub(1, 60))
 			else
-				change.proposed_full = result
-				current = result
-				local old_count = edit.end_line - edit.start_line + 1
-				local new_count = #vim.split(edit.new_content, "\n", { plain = true })
-				offset = offset + (new_count - old_count)
+				if first_lnum == nil then
+					local before = current:sub(1, current:find(escaped) - 1)
+					local _, newline_count = before:gsub("\n", "")
+					first_lnum = newline_count + 1
+				end
+				current = new_full
 			end
-
-			table.insert(changes, change)
 		end
+
+		local change = {
+			path = path,
+			original_full = original_full,
+			proposed_full = current,
+			lnum = first_lnum or 1,
+		}
+		if #errors > 0 then
+			change.error = table.concat(errors, "; ")
+		end
+
+		table.insert(changes, change)
 	end
 
 	return { changes = changes }
-end
-
-local function populate_quickfix(session)
-	local cwd = vim.fn.getcwd()
-	local qf_items = {}
-
-	for _, change in ipairs(session.changes) do
-		local rel_path = change.path
-		if vim.startswith(rel_path, cwd .. "/") then
-			rel_path = rel_path:sub(#cwd + 2)
-		end
-
-		local text
-		if change.error then
-			text = "[ERROR] " .. rel_path .. ": " .. change.error
-		else
-			local first_line = (change.new_content or ""):match("([^\n]*)")
-			text = string.format(
-				"[Edit] %s lines %d-%d: %s",
-				rel_path,
-				change.start_line,
-				change.end_line,
-				first_line or ""
-			)
-		end
-
-		table.insert(qf_items, {
-			filename = change.path,
-			lnum = change.start_line,
-			col = 1,
-			text = text,
-		})
-	end
-
-	vim.fn.setqflist({}, "r", { title = "AssistMulti Changes", items = qf_items })
-	vim.cmd("copen")
-
-	-- Install a buffer-local <CR> handler in the quickfix window.
-	for _, win in ipairs(vim.api.nvim_list_wins()) do
-		local buf = vim.api.nvim_win_get_buf(win)
-		if vim.bo[buf].buftype == "quickfix" then
-			vim.keymap.set("n", "<CR>", function()
-				M.on_qf_select()
-			end, { buffer = buf, noremap = true, silent = true })
-			break
-		end
-	end
-end
-
-function M.on_qf_select()
-	if not _session then
-		vim.notify("[assist.nvim] No active AssistMulti session.", vim.log.levels.WARN)
-		return
-	end
-	local idx = vim.api.nvim_win_get_cursor(0)[1]
-	local change = _session.changes[idx]
-	if not change then
-		vim.notify("[assist.nvim] No change at index " .. idx, vim.log.levels.WARN)
-		return
-	end
-	diff.open_diff(change)
 end
 
 local function run_multi(user_prompt)
@@ -154,7 +86,18 @@ local function run_multi(user_prompt)
 	local stdout_lines = {}
 	local stderr_lines = {}
 
-	local cmd = { opts.claude_cmd, "--print", "--output-format", "json", "--model", opts.model, prompt }
+	local cmd = {
+		opts.claude_cmd,
+		"--disallowedTools",
+		"Write",
+		"--print",
+		"--verbose",
+		"--output-format",
+		"stream-json",
+		"--model",
+		opts.model,
+		prompt,
+	}
 	utils.log("=== AssistMulti command: " .. table.concat(cmd, " "))
 	local job_id = vim.fn.jobstart(cmd, {
 		stdout_buffered = false,
@@ -163,6 +106,7 @@ local function run_multi(user_prompt)
 			for _, line in ipairs(lines) do
 				if line ~= "" then
 					table.insert(stdout_lines, line)
+					utils.log("=== AssistMulti stdout: " .. line)
 				end
 			end
 		end,
@@ -193,14 +137,14 @@ local function run_multi(user_prompt)
 					return
 				end
 
-				local line_edits, err = utils.parse_all_file_tool_uses(raw)
+				local tool_uses, err = utils.parse_all_file_tool_uses(raw)
 				if err then
 					vim.notify("[assist.nvim] " .. err, vim.log.levels.WARN)
 					return
 				end
 
-				_session = build_session(line_edits)
-				populate_quickfix(_session)
+				local session = build_session(tool_uses)
+				review.open_review(session)
 			end)
 		end,
 	})

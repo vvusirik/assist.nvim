@@ -130,6 +130,7 @@ local function run_assist_ask(selection, user_prompt)
 					vim.notify("[assist.nvim] " .. err, vim.log.levels.ERROR)
 					return
 				end
+				assert(result ~= nil)
 				local answer_buf = vim.api.nvim_create_buf(false, true)
 				vim.bo[answer_buf].bufhidden = "wipe"
 				vim.api.nvim_buf_set_lines(answer_buf, 0, -1, false, vim.split(result, "\n", { plain = true }))
@@ -156,7 +157,9 @@ local function run_assist_ask(selection, user_prompt)
 	})
 
 	if job_id <= 0 then
-		spinner.stop()
+		if spinner then
+			spinner.stop()
+		end
 		vim.notify("[assist.nvim] Failed to start claude (job_id=" .. job_id .. ")", vim.log.levels.ERROR)
 		return
 	end
