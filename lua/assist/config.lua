@@ -2,6 +2,7 @@ local M = {}
 
 M.defaults = {
 	claude_cmd = "claude",
+	model = "default",
 	prompt_buf = {
 		width = 100,
 		height = 8,

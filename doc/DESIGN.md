@@ -22,11 +22,19 @@ Note that this plugin primarily tries to tackle workflows for small and medium s
 
 As part of the design philosophy, assist works asynchronously in the background so that you can continue your work even as the agent is working.
 
-## Comparison to Alternatives
+## Inspiration from Alternatives
 
 [opencode.nvim](https://github.com/nickjvandyke/opencode.nvim)
+
+- Concepts like sending inline context to the agent and several of the commands like ask and context completion
+
 [99](https://github.com/ThePrimeagen/99/tree/master)
+
+- inline async editing of code blocks
+
 [pi](https://shittycodingagent.ai/)
+
+- assist borrows the design philosophy of building a simple but extendable tool
 
 ## Design
 
@@ -91,20 +99,21 @@ This feature works much like the Selection Edit workflow, but can be triggered f
 - File context autocomplete (when using @ symbol) similar to how claude code autocomplete works
 
 * Attach prompt to a specific conversation
-* Send prompt to a specific subagent
+* Send prompt to a specific subagent (?)
 * Reference skills
 
 ## To Do
 
 ### Prompt Buffer
 
-- [ ] Improve the buffer ergonomics (wrap text)
+- [x] Improve the buffer ergonomics (wrap text)
+- [ ] Request cancellation
 
 ### Context
 
 - [ ] File context autocomplete via `@` symbol in the prompt dialog
-- [ ] Treesitter AST search
 - [ ] Include line numbers / code region
+- [ ] Treesitter AST search
 
 ### Claude
 
@@ -121,7 +130,7 @@ This feature works much like the Selection Edit workflow, but can be triggered f
 
 ### Features
 
-- [ ] Ask a question about a particular region or file of code inline get the response back in an inline buffer
+- [x] Ask a question about a particular region or file of code inline get the response back in an inline buffer
 - [ ] Conversation / message history
 
 ## Notes

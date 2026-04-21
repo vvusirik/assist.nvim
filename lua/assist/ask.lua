@@ -84,8 +84,11 @@ local function run_assist_ask(selection, user_prompt)
 		"--verbose",
 		"--output-format",
 		"stream-json",
+		"--model",
+		opts.model,
 		prompt,
 	}
+	utils.log("=== AssistAsk command: " .. table.concat(cmd, " "))
 
 	local job_id = vim.fn.jobstart(cmd, {
 		stdout_buffered = false,

@@ -53,6 +53,8 @@ local function run_assist_completion()
 		"--verbose",
 		"--output-format",
 		"stream-json",
+		"--model",
+		opts.model,
 		prompt,
 	}
 	local job_id = vim.fn.jobstart(cmd, {
