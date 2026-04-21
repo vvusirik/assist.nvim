@@ -12,18 +12,8 @@ local function build_multi_prompt(user_prompt)
 	local cwd = vim.fn.getcwd()
 	local parts = {
 		"<task>Analyze the project and make all changes required by the instructions. "
-			.. "Use your tools to read and explore any files you need. "
-			.. "When ready, respond with ONLY a raw JSON array — no explanation, no markdown, no code fences. "
-			.. "Each element must be an object with exactly these fields: "
-			.. '"file_path" (path relative to cwd), '
-			.. '"start_line" (1-indexed first line of the region to replace, inclusive), '
-			.. '"end_line" (1-indexed last line of the region to replace, inclusive), '
-			.. '"new_content" (the text that will replace lines start_line through end_line entirely). '
-			.. "IMPORTANT: new_content replaces the specified lines completely — do NOT include the "
-			.. "text of lines outside [start_line, end_line] in new_content, or those lines will be duplicated. "
-			.. "To insert new lines after line N without removing anything: "
-			.. 'set start_line=N, end_line=N, new_content="<exact text of line N>\\n<new lines to insert>". '
-			.. "One object per contiguous changed region. Do not merge unrelated changes into one object.</task>",
+			.. "You MUST apply your changes using the Edit tool — do not print the code as text. "
+			.. "Use your tools to read and explore any files you need. ",
 		string.format("<cwd>%s</cwd>", cwd),
 		string.format("<instructions>%s</instructions>", user_prompt),
 	}
@@ -164,7 +154,7 @@ local function run_multi(user_prompt)
 	local stdout_lines = {}
 	local stderr_lines = {}
 
-	local cmd = { opts.claude_cmd, "--print", "--output-format", "json", prompt }
+	local cmd = { opts.claude_cmd, "--print", "--output-format", "json", "--model", opts.model, prompt }
 	utils.log("=== AssistMulti command: " .. table.concat(cmd, " "))
 	local job_id = vim.fn.jobstart(cmd, {
 		stdout_buffered = false,
@@ -203,7 +193,7 @@ local function run_multi(user_prompt)
 					return
 				end
 
-				local line_edits, err = utils.parse_line_edits(raw)
+				local line_edits, err = utils.parse_all_file_tool_uses(raw)
 				if err then
 					vim.notify("[assist.nvim] " .. err, vim.log.levels.WARN)
 					return

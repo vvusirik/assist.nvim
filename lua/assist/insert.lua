@@ -45,6 +45,8 @@ local function run_assist_insert(insert_info, user_prompt)
 		"--verbose",
 		"--output-format",
 		"stream-json",
+		"--model",
+		opts.model,
 		prompt,
 	}
 	utils.log("=== AssistInsert command: " .. table.concat(cmd, " "))
