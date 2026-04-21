@@ -8,6 +8,7 @@ local select = require("assist.select")
 local insert = require("assist.insert")
 local multi = require("assist.multi")
 local ask = require("assist.ask")
+local complete = require("assist.complete")
 
 vim.api.nvim_create_user_command("AssistSelect", function(opts)
 	select.assist_visual_selection(opts.line1, opts.line2)
@@ -28,3 +29,8 @@ vim.api.nvim_create_user_command("AssistAsk", function(opts)
 		ask.assist_ask_normal()
 	end
 end, { range = true, desc = "Ask AI a question and get the response inline" })
+
+vim.api.nvim_create_user_command("AssistComplete", function()
+	complete.assist_insert_completion()
+end, { desc = "Generate and propose code completion suggestions" })
+
