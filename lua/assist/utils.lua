@@ -90,6 +90,7 @@ function M.prompt_and_run(title, on_submit)
 		if vim.api.nvim_win_is_valid(win) then
 			vim.api.nvim_win_close(win, true)
 		end
+		vim.cmd("stopinsert")
 	end
 
 	local function submit()
@@ -105,6 +106,7 @@ function M.prompt_and_run(title, on_submit)
 
 	local map_opts = { noremap = true, silent = true, buffer = buf }
 	vim.keymap.set("n", "<CR>", submit, map_opts)
+	vim.keymap.set("i", "<C-s>", submit, map_opts)
 	vim.keymap.set("n", "q", close, map_opts)
 	vim.keymap.set("n", "<Esc>", close, map_opts)
 end

@@ -31,6 +31,10 @@ vim.api.nvim_create_user_command("AssistAsk", function(opts)
 	end
 end, { range = true, desc = "Ask AI a question and get the response inline" })
 
+vim.api.nvim_create_user_command("AssistExplain", function(opts)
+	ask.assist_explain(opts.line1, opts.line2)
+end, { range = true, desc = "Ask AI to explain a section of code" })
+
 vim.api.nvim_create_user_command("AssistComplete", function()
 	complete.assist_insert_completion()
 end, { desc = "Generate and propose code completion suggestions" })

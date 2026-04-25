@@ -177,4 +177,9 @@ function M.assist_ask_normal()
 	end)
 end
 
+function M.assist_explain(line1, line2)
+	local selection = utils.get_visual_selection(line1, line2)
+	run_assist_ask(selection, "Explain this section.")
+end
+
 return M
