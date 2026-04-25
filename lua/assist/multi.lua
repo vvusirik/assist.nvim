@@ -21,6 +21,7 @@ local function build_multi_prompt(user_prompt)
 end
 
 -- Build session state from a list of Edit tool_use objects.
+-- Consolidates diffs by file
 local function build_session(tool_uses)
 	local cwd = vim.fn.getcwd()
 	local changes = {}

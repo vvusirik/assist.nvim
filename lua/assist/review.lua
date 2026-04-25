@@ -127,6 +127,8 @@ function M.render_panel()
 			box = "[✓]"
 		elseif status == "rejected" then
 			box = "[✗]"
+		elseif change.error then
+			box = "[!]"
 		else
 			box = "[ ]"
 		end
@@ -210,6 +212,10 @@ function M.show_change(idx)
 
 	vim.api.nvim_win_set_cursor(_state.prop_win, { 1, 1 })
 	vim.api.nvim_set_current_win(_state.prop_win)
+
+	if change.error then
+		vim.notify("[assist.nvim] Edit error: " .. change.error, vim.log.levels.WARN)
+	end
 end
 
 function M.accept()
@@ -220,6 +226,11 @@ function M.accept()
 	end
 	local change = session.changes[idx]
 	if not change then
+		return
+	end
+
+	if change.error then
+		vim.notify("[assist.nvim] Cannot accept: " .. change.error, vim.log.levels.ERROR)
 		return
 	end
 
@@ -287,4 +298,5 @@ function M.test_review()
 end
 
 return M
+
 
