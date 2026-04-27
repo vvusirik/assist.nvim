@@ -80,26 +80,36 @@ function M.open_review(session)
 
 	-- Keymaps on panel buffer
 	local km_opts = { noremap = true, silent = true }
-	vim.keymap.set("n", "<CR>", function()
-		local idx = vim.api.nvim_win_get_cursor(_state.panel_win)[1]
-		M.show_change(idx)
-	end, vim.tbl_extend("force", km_opts, { buffer = panel_buf, desc = "Open diff for entry under cursor" }))
+	local function keymap(km, func, buf, desc)
+		vim.keymap.set("n", km, func, vim.tbl_extend("force", km_opts, { buffer = buf, desc = desc }))
+	end
 
-	-- Close review panel
+	local open_key_maps = { "<CR>", "<2-LeftMouse>", "o", "l" }
+	for _, km in ipairs(open_key_maps) do
+		keymap(km, function()
+			local idx = vim.api.nvim_win_get_cursor(_state.panel_win)[1]
+			M.show_change(idx)
+		end, panel_buf, "Open diff for entry under cursor")
+	end
+
+	-- Keymaps on all buffers
 	for _, buf in ipairs({ panel_buf, orig_buf, prop_buf }) do
-		vim.keymap.set("n", "q", M.close, vim.tbl_extend("force", km_opts, { buffer = buf, desc = "Close review tab" }))
-		vim.keymap.set("n", "<leader>da", function()
+		keymap("q", M.close, buf, "Close review tab")
+		keymap("<leader>da", function()
 			M.accept()
-		end, vim.tbl_extend("force", km_opts, { buffer = buf, desc = "Accept diff change" }))
-		vim.keymap.set("n", "<leader>dr", function()
+		end, buf, "Accept diff change")
+		keymap("<leader>dr", function()
 			M.reject()
-		end, vim.tbl_extend("force", km_opts, { buffer = buf, desc = "Reject diff change" }))
-		vim.keymap.set("n", "<leader>dn", function()
+		end, buf, "Reject diff change")
+		keymap("<tab>", function()
 			M.advance_change(false, false)
-		end, vim.tbl_extend("force", km_opts, { buffer = buf, desc = "Go to next diff" }))
-		vim.keymap.set("n", "<leader>dp", function()
+		end, buf, "Go to next diff")
+		keymap("<s-tab>", function()
 			M.advance_change(true, false)
-		end, vim.tbl_extend("force", km_opts, { buffer = buf, desc = "Go to next diff" }))
+		end, buf, "Go to next diff")
+		keymap("<leader>e", function()
+			vim.api.nvim_set_current_win(_state.panel_win)
+		end, buf, "Focus review panel")
 	end
 
 	M.render_panel()
@@ -298,5 +308,3 @@ function M.test_review()
 end
 
 return M
-
-
